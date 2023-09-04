@@ -27,6 +27,7 @@ typedef struct {
     Music music;
     Font font;
     Shader circle;
+    Texture background;
     int circle_radius_location;
     int circle_power_location;
     bool error;
@@ -141,6 +142,34 @@ size_t fft_analyze(float dt)
     }
 
     return m;
+}
+
+void background_render(size_t w, size_t h) 
+{
+    if (p->background.id != 0)
+    {
+        float screen_aspect = (float)w / h;
+        float background_aspect = (float)p->background.width / p->background.height;
+        float scale = 1.0f;
+        if (screen_aspect > background_aspect)
+        {
+            scale = (float)w / p->background.width;
+        }
+        else
+        {
+            scale = (float)h / p->background.height;
+        }
+
+        DrawTextureEx(
+            p->background,
+            (Vector2){
+                .x = w / 2 - p->background.width * scale / 2,
+                .y = h / 2 - p->background.height * scale / 2,
+            },
+            0,
+            scale,
+            WHITE);
+    }
 }
 
 void fft_render(size_t w, size_t h, size_t m)
@@ -268,6 +297,12 @@ void plug_init(void)
     p->circle_radius_location = GetShaderLocation(p->circle, "radius");
     p->circle_power_location = GetShaderLocation(p->circle, "power");
     p->screen = LoadRenderTexture(RENDER_WIDTH, RENDER_HEIGHT);
+
+    if(FileExists("./resources/background.png")) {
+        Image image = LoadImage("./resources/background.png");
+        p->background = LoadTextureFromImage(image);
+        UnloadImage(image);
+    }
 }
 
 Plug *plug_pre_reload(void)
@@ -288,6 +323,12 @@ void plug_post_reload(Plug *pp)
     p->circle = LoadShader(NULL, TextFormat("./resources/shaders/glsl%d/circle.fs", GLSL_VERSION));
     p->circle_radius_location = GetShaderLocation(p->circle, "radius");
     p->circle_power_location = GetShaderLocation(p->circle, "power");
+
+    if(FileExists("./resources/background.png")) {
+        Image image = LoadImage("./resources/background.png");
+        p->background = LoadTextureFromImage(image);
+        UnloadImage(image);
+    }
 }
 
 void plug_update(void)
@@ -298,25 +339,47 @@ void plug_update(void)
     if (IsFileDropped()) {
         FilePathList droppedFiles = LoadDroppedFiles();
         if (droppedFiles.count > 0) {
-            free(p->file_path);
-            p->file_path = strdup(droppedFiles.paths[0]);
+            for(size_t i = 0; i < droppedFiles.count; ++i) {
+               // if file is png load it as background
+                if (IsFileExtension(droppedFiles.paths[i], ".png")) {
+                    if(p->background.id != 0) UnloadTexture(p->background);
 
-            if (IsMusicReady(p->music)) {
-                StopMusicStream(p->music);
-                UnloadMusicStream(p->music);
-            }
+                    Image image = LoadImage(droppedFiles.paths[i]);
+                    p->background = LoadTextureFromImage(image);
+                    UnloadImage(image);
+                    continue;
+                }
 
-            p->music = LoadMusicStream(p->file_path);
+                // if is mp3 or wav load it as music
+                if (!IsFileExtension(droppedFiles.paths[i], ".mp3") && !IsFileExtension(droppedFiles.paths[i], ".wav")) {
+                    continue;
+                }
 
-            if (IsMusicReady(p->music)) {
-                p->error = false;
-                SetMusicVolume(p->music, 0.5f);
-                AttachAudioStreamProcessor(p->music.stream, callback);
-                PlayMusicStream(p->music);
-            } else {
-                p->error = true;
+                free(p->file_path);
+                p->file_path = strdup(droppedFiles.paths[0]);
+
+                if (IsMusicReady(p->music)) {
+                    StopMusicStream(p->music);
+                    UnloadMusicStream(p->music);
+                }
+
+                p->music = LoadMusicStream(p->file_path);
+
+                if (IsMusicReady(p->music)) {
+                    p->error = false;
+                    printf("music.frameCount = %u\n", p->music.frameCount);
+                    printf("music.stream.sampleRate = %u\n", p->music.stream.sampleRate);
+                    printf("music.stream.sampleSize = %u\n", p->music.stream.sampleSize);
+                    printf("music.stream.channels = %u\n", p->music.stream.channels);
+                    SetMusicVolume(p->music, 0.5f);
+                    AttachAudioStreamProcessor(p->music.stream, callback);
+                    PlayMusicStream(p->music);
+                } else {
+                    p->error = true;
+                }
             }
         }
+        
         UnloadDroppedFiles(droppedFiles);
     }
 
@@ -355,6 +418,7 @@ void plug_update(void)
                 SetTraceLogLevel(LOG_WARNING);
             }
 
+            background_render(GetRenderWidth(), GetRenderHeight());
             size_t m = fft_analyze(GetFrameTime());
             fft_render(GetRenderWidth(), GetRenderHeight(), m);
         } else { // We are waiting for the user to Drag&Drop the Music
@@ -473,6 +537,7 @@ void plug_update(void)
 
                 BeginTextureMode(p->screen);
                 ClearBackground(GetColor(0x151515FF));
+                background_render(p->screen.texture.width, p->screen.texture.height);
                 fft_render(p->screen.texture.width, p->screen.texture.height, m);
                 EndTextureMode();
 
